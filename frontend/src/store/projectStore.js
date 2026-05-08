@@ -49,12 +49,12 @@ const useProjectStore = create((set, get) => ({
       const res = await fetch(`${API}/api/projects/${id}`);
       const data = await res.json();
       set({ currentProject: data, error: null });
-      // Auto-detect step
+      // Auto-detect step: 0=Script, 1=Images, 2=Video, 3=Audio, 4=Complete
       const segs = data.segments || [];
-      if (data.status === 'complete') set({ currentStep: 5 });
-      else if (data.status === 'audio_ready') set({ currentStep: 4 });
-      else if (segs.some(s => s.status === 'video_ready')) set({ currentStep: 3 });
-      else if (segs.some(s => s.status === 'images_ready' || s.status === 'image_selected')) set({ currentStep: 2 });
+      if (data.status === 'complete') set({ currentStep: 4 });
+      else if (data.status === 'audio_ready') set({ currentStep: 3 });
+      else if (segs.some(s => s.status === 'video_ready')) set({ currentStep: 2 });
+      else if (segs.some(s => s.status === 'images_ready' || s.status === 'image_selected')) set({ currentStep: 1 });
       else if (segs.length > 0) set({ currentStep: 1 });
       else set({ currentStep: 0 });
     } catch (e) {
@@ -137,8 +137,9 @@ const useProjectStore = create((set, get) => ({
     try {
       const res = await fetch(`${API}/api/projects/${currentProject.id}/segments/${segIndex}/images`, { method: 'POST' });
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || 'Image generation failed');
+        let msg = 'Image generation failed';
+        try { const err = await res.json(); msg = err.detail || msg; } catch { msg = await res.text() || msg; }
+        throw new Error(msg);
       }
       const data = await res.json();
       await get().loadProject(currentProject.id);
@@ -148,6 +149,31 @@ const useProjectStore = create((set, get) => ({
     } finally {
       setLoading(key, false);
     }
+  },
+
+  generateAllImages: async () => {
+    const { currentProject, generateImages } = get();
+    if (!currentProject) return;
+    const segments = currentProject.segments || [];
+    
+    // Find segments that don't have images yet
+    const pendingSegs = segments.filter(s => {
+      const imgs = s.assets?.filter(a => a.asset_type === 'image') || [];
+      return imgs.length === 0;
+    });
+
+    if (pendingSegs.length === 0) return;
+
+    set({ error: null });
+    // Generate sequentially to avoid 429 rate limits from Pollinations.ai
+    for (const seg of pendingSegs) {
+      await generateImages(seg.seg_index);
+      // Small delay between segments to avoid rate limiting
+      if (pendingSegs.indexOf(seg) < pendingSegs.length - 1) {
+        await new Promise(r => setTimeout(r, 3000));
+      }
+    }
+    await get().loadProject(currentProject.id);
   },
 
   selectImage: async (segIndex, assetId) => {
@@ -166,7 +192,7 @@ const useProjectStore = create((set, get) => ({
   },
 
   // ── Video Generation ──────────────────────────────
-  generateVideo: async (segIndex, modelChoice = 'hunyuan') => {
+  generateVideo: async (segIndex, modelChoice = 'zoom_in') => {
     const { currentProject, setLoading } = get();
     if (!currentProject) return;
     const key = `video_${segIndex}`;
@@ -179,8 +205,9 @@ const useProjectStore = create((set, get) => ({
         body: JSON.stringify({ model_choice: modelChoice }),
       });
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || 'Video generation failed');
+        let msg = 'Video generation failed';
+        try { const err = await res.json(); msg = err.detail || msg; } catch { msg = await res.text() || msg; }
+        throw new Error(msg);
       }
       await get().loadProject(currentProject.id);
     } catch (e) {
@@ -206,12 +233,13 @@ const useProjectStore = create((set, get) => ({
         }),
       });
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || 'Audio generation failed');
+        let msg = 'Audio generation failed';
+        try { const err = await res.json(); msg = err.detail || msg; } catch { msg = await res.text() || msg; }
+        throw new Error(msg);
       }
       const data = await res.json();
       await get().loadProject(currentProject.id);
-      set({ currentStep: 4 });
+      set({ currentStep: 3 });
       return data;
     } catch (e) {
       set({ error: e.message });
@@ -229,12 +257,13 @@ const useProjectStore = create((set, get) => ({
     try {
       const res = await fetch(`${API}/api/projects/${currentProject.id}/render`, { method: 'POST' });
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || 'Render failed');
+        let msg = 'Render failed';
+        try { const err = await res.json(); msg = err.detail || msg; } catch { msg = await res.text() || msg; }
+        throw new Error(msg);
       }
       const data = await res.json();
       await get().loadProject(currentProject.id);
-      set({ currentStep: 5 });
+      set({ currentStep: 4 });
       return data;
     } catch (e) {
       set({ error: e.message });

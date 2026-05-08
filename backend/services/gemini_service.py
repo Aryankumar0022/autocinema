@@ -11,13 +11,23 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 from google.api_core.exceptions import ResourceExhausted, TooManyRequests
 
+import logging
+
 load_dotenv()
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash-latest")
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
+
+def configure_genai():
+    api_key = os.getenv("GEMINI_API_KEY")
+    if api_key:
+        genai.configure(api_key=api_key)
+    return api_key
+
+configure_genai()
 
 
 ANALYSIS_PROMPT = """You are a professional cinematic director and video producer specializing in vertical short-form content (9:16 aspect ratio) for Instagram Reels and TikTok.
@@ -146,12 +156,19 @@ class GeminiService:
         Analyze a script using Gemini (configurable model).
         Returns a list of segment dictionaries.
         """
-        if not GEMINI_API_KEY:
-            raise ValueError("GEMINI_API_KEY is not configured. Please set it in your .env file.")
+        api_key = configure_genai()
+        if not api_key:
+            print("WARNING: GEMINI_API_KEY not found, falling back to local processing")
+            return GeminiService._fallback_basic_segments(script)
 
-        model = genai.GenerativeModel(GEMINI_MODEL)
+        try:
+            model = genai.GenerativeModel(GEMINI_MODEL)
+        except Exception as e:
+            logger.error(f"Error initializing Gemini model: {e}")
+            return GeminiService._fallback_basic_segments(script)
 
         full_prompt = ANALYSIS_PROMPT + script.strip()
+        print(f"DEBUG: Starting Gemini analysis with model {GEMINI_MODEL}...")
 
         generation_config = genai.types.GenerationConfig(
             temperature=0.7,
@@ -163,15 +180,18 @@ class GeminiService:
         last_err: Exception | None = None
         for attempt in range(3):
             try:
+                print(f"DEBUG: Calling generate_content (attempt {attempt+1})...")
                 response = await asyncio.to_thread(
                     model.generate_content,
                     full_prompt,
                     generation_config=generation_config,
                 )
+                print(f"DEBUG: generate_content succeeded!")
                 break
             except (ResourceExhausted, TooManyRequests) as e:
                 last_err = e
                 msg = str(e)
+                print(f"DEBUG: Gemini Quota/Rate limit error: {msg}")
                 delay = GeminiService._extract_retry_delay_seconds(msg)
                 # If quota is effectively disabled (limit: 0), don't spin retries.
                 if "limit: 0" in msg or "Quota exceeded" in msg:
@@ -183,7 +203,10 @@ class GeminiService:
                 return GeminiService._fallback_basic_segments(script)
             except Exception as e:
                 last_err = e
-                # Unknown Gemini SDK error — fall back so the UX stays unblocked.
+                print(f"ERROR: Gemini API error (attempt {attempt+1}): {e}")
+                if attempt < 2:
+                    await asyncio.sleep(1.0 + attempt)
+                    continue
                 return GeminiService._fallback_basic_segments(script)
         else:
             # Shouldn't happen, but keep mypy happy.
@@ -193,12 +216,14 @@ class GeminiService:
 
         try:
             raw_text = (response.text or "").strip()
-        except Exception:
+        except Exception as e:
             # In some cases (e.g., safety blocks) the SDK raises when accessing `.text`.
-            raw_text = ""
+            print(f"WARNING: Could not access response.text (possibly safety block): {e}")
+            return GeminiService._fallback_basic_segments(script)
 
         if not raw_text:
-            raise ValueError(f"Gemini returned an empty response. Raw response: {response!r}")
+            logger.warning("Gemini returned an empty response, falling back to local processing")
+            return GeminiService._fallback_basic_segments(script)
 
         # Clean up the response - strip markdown code fences if present
         if raw_text.startswith("```"):

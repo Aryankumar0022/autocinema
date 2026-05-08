@@ -2,7 +2,7 @@ import { useState } from 'react';
 import useProjectStore from '../store/projectStore';
 
 export default function ImagePicker() {
-  const { currentProject, generateImages, selectImage, loading, setStep } = useProjectStore();
+  const { currentProject, generateImages, generateAllImages, selectImage, loading, setStep } = useProjectStore();
   const segments = currentProject?.segments || [];
   const [activeSegIdx, setActiveSegIdx] = useState(0);
 
@@ -14,6 +14,8 @@ export default function ImagePicker() {
     return imgs.some(a => a.selected);
   });
 
+  const anyPending = segments.some(s => (s.assets?.filter(a => a.asset_type === 'image') || []).length === 0);
+
   const handleGenerate = () => {
     if (activeSeg) generateImages(activeSeg.seg_index);
   };
@@ -24,14 +26,25 @@ export default function ImagePicker() {
 
   return (
     <div className="animate-fade-in-up" style={{ maxWidth: 900 }}>
-      <div style={{ marginBottom: 24 }}>
-        <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>
-          <span style={{ color: 'var(--accent-pink)', marginRight: 10 }}>02</span>
-          Image Generation
-        </h2>
-        <p style={{ color: 'var(--text-secondary)', fontSize: 14 }}>
-          For each segment, 2 random cloud models generate 1 image each. Pick your favorite.
-        </p>
+      <div style={{ marginBottom: 24, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div>
+          <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>
+            <span style={{ color: 'var(--accent-pink)', marginRight: 10 }}>02</span>
+            Image Generation
+          </h2>
+          <p style={{ color: 'var(--text-secondary)', fontSize: 14 }}>
+            For each segment, 2 random cloud models generate 1 image each. Pick your favorite.
+          </p>
+        </div>
+        {anyPending && (
+          <button 
+            className="btn-primary" 
+            onClick={generateAllImages}
+            style={{ padding: '10px 20px', fontSize: 13, background: 'var(--gradient-purple)' }}
+          >
+            ✨ Generate All Images
+          </button>
+        )}
       </div>
 
       {/* Segment Tabs */}
@@ -47,8 +60,12 @@ export default function ImagePicker() {
                 background: done ? 'rgba(34,197,94,0.1)' : i === activeSegIdx ? 'var(--bg-card-hover)' : 'var(--bg-card)',
                 color: done ? '#4ade80' : i === activeSegIdx ? 'var(--text-primary)' : 'var(--text-muted)',
                 cursor: 'pointer', transition: 'all 0.2s',
+                display: 'flex', alignItems: 'center', gap: 6
               }}>
-              Seg {i + 1} {done && '✓'}
+              Seg {i + 1} 
+              {loading[`images_${s.seg_index}`] ? (
+                <span className="animate-spin" style={{ width: 12, height: 12, border: '2px solid currentColor', borderTopColor: 'transparent', borderRadius: '50%' }} />
+              ) : done ? '✓' : ''}
             </button>
           );
         })}
@@ -74,7 +91,7 @@ export default function ImagePicker() {
                 ) : '🎨 Generate 2 Image Options'}
               </button>
               <p style={{ marginTop: 12, fontSize: 12, color: 'var(--text-muted)' }}>
-                Two random models will be selected from FLUX.1 / SD 3.5 / SDXL
+                Two random models will be selected from FLUX / FLUX Realism / Turbo
               </p>
             </div>
           ) : (
@@ -84,7 +101,7 @@ export default function ImagePicker() {
                   <div key={asset.id}
                     className={`selection-card ${asset.selected ? 'selected' : ''}`}
                     onClick={() => handleSelect(asset.id)}>
-                    <div style={{ aspectRatio: '9/16', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                    <div style={{ aspectRatio: '1/1', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
                       {asset.url ? (
                         <img src={asset.url} alt={asset.model_name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                       ) : (
@@ -95,7 +112,7 @@ export default function ImagePicker() {
                       <p style={{ fontSize: 12, fontWeight: 600, color: asset.selected ? 'var(--accent-purple)' : 'var(--text-secondary)' }}>
                         {asset.model_name || 'Cloud Model'}
                       </p>
-                      {asset.selected && <span className="badge badge-purple" style={{ marginTop: 6 }}>✓ Selected</span>}
+                      {Boolean(asset.selected) && <span className="badge badge-purple" style={{ marginTop: 6 }}>✓ Selected</span>}
                     </div>
                   </div>
                 ))}
@@ -110,7 +127,7 @@ export default function ImagePicker() {
 
       {/* Next Step */}
       {allSegsDone && (
-        <button className="btn-primary" onClick={() => setStep(3)} style={{ width: '100%', padding: 16, marginTop: 20 }}>
+        <button className="btn-primary" onClick={() => setStep(2)} style={{ width: '100%', padding: 16, marginTop: 20 }}>
           🎥 Continue to Video Generation →
         </button>
       )}

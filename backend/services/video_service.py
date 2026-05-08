@@ -1,16 +1,41 @@
 """
 AutoCinema Video Service
-Image-to-video generation using HunyuanVideo and Stable Video Diffusion.
+Ken Burns effect video clips from still images using FFmpeg.
 """
 
 import os
-import httpx
+import random
+import subprocess
+import asyncio
+from functools import partial
 from dotenv import load_dotenv
 
 load_dotenv()
 
-HF_API_KEY = os.getenv("HF_API_KEY")
 STORAGE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "storage", "outputs")
+
+KENBURNS_PRESETS = {
+    "zoom_in": {
+        "display_name": "Cinematic Zoom In",
+        "description": "Slow zoom into the image center",
+        "filter": "scale=4000:-1,zoompan=z=zoom+0.0015:d=144:x=iw/2-(iw/zoom/2):y=ih/2-(ih/zoom/2):s=1920x1080:fps=24",
+    },
+    "zoom_out": {
+        "display_name": "Epic Zoom Out",
+        "description": "Starts zoomed in, slowly reveals the frame",
+        "filter": "scale=4000:-1,zoompan=z=1.5-on/144*0.5:d=144:x=iw/2-(iw/zoom/2):y=ih/2-(ih/zoom/2):s=1920x1080:fps=24",
+    },
+    "pan_left": {
+        "display_name": "Smooth Pan Left",
+        "description": "Gentle horizontal camera pan",
+        "filter": "scale=4000:-1,zoompan=z=1.2:d=144:x=on*5:y=ih/2-(ih/zoom/2):s=1920x1080:fps=24",
+    },
+    "pan_up": {
+        "display_name": "Vertical Pan Up",
+        "description": "Slow upward camera tilt",
+        "filter": "scale=4000:-1,zoompan=z=1.2:d=144:x=iw/2-(iw/zoom/2):y=ih/4+on*2:s=1920x1080:fps=24",
+    },
+}
 
 
 class VideoService:
@@ -18,74 +43,61 @@ class VideoService:
     async def generate_video(image_path: str, prompt: str, model_choice: str,
                              project_id: str, segment_index: int) -> dict:
         filename = f"proj_{project_id}_seg_{segment_index}_video.mp4"
-        try:
-            if model_choice == "hunyuan":
-                video_bytes = await VideoService._generate_hunyuan(image_path, prompt)
-                model_name = "HunyuanVideo"
-            else:
-                video_bytes = await VideoService._generate_svd(image_path)
-                model_name = "Stable Video Diffusion"
-            if video_bytes:
-                saved = await VideoService._save_video(video_bytes, filename)
-                return {"success": True, "model_name": model_name,
-                        "file_path": saved, "url": f"/static/outputs/{filename}"}
-        except Exception as e:
-            print(f"[VideoService] {model_choice} failed: {e}")
-        # Fallback
-        try:
-            if model_choice == "hunyuan":
-                video_bytes = await VideoService._generate_svd(image_path)
-                model_name = "SVD (Fallback)"
-            else:
-                video_bytes = await VideoService._generate_hunyuan(image_path, prompt)
-                model_name = "Hunyuan (Fallback)"
-            if video_bytes:
-                saved = await VideoService._save_video(video_bytes, filename)
-                return {"success": True, "model_name": model_name,
-                        "file_path": saved, "url": f"/static/outputs/{filename}"}
-        except Exception as e2:
-            print(f"[VideoService] Fallback failed: {e2}")
-        return {"success": False, "model_name": "", "file_path": "", "url": ""}
 
-    @staticmethod
-    async def _generate_hunyuan(image_path: str, prompt: str) -> bytes | None:
-        if not HF_API_KEY:
-            raise ValueError("HF_API_KEY not set")
-        url = "https://api-inference.huggingface.co/models/tencent/HunyuanVideo"
-        headers = {"Authorization": f"Bearer {HF_API_KEY}", "Content-Type": "application/json"}
-        payload = {"inputs": prompt, "parameters": {"image": image_path, "width": 576, "height": 1024, "num_frames": 61}}
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            r = await client.post(url, json=payload, headers=headers)
-            if r.status_code == 200:
-                return r.content
-            raise ValueError(f"Hunyuan {r.status_code}: {r.text[:200]}")
-
-    @staticmethod
-    async def _generate_svd(image_path: str) -> bytes | None:
-        if not HF_API_KEY:
-            raise ValueError("HF_API_KEY not set")
-        url = "https://api-inference.huggingface.co/models/stabilityai/stable-video-diffusion-img2vid-xt"
-        headers = {"Authorization": f"Bearer {HF_API_KEY}"}
-        abs_path = image_path
+        abs_image_path = image_path
         if image_path.startswith("/static/outputs/"):
-            abs_path = os.path.join(STORAGE_DIR, os.path.basename(image_path))
-        if os.path.exists(abs_path):
-            with open(abs_path, "rb") as f:
-                image_bytes = f.read()
-        else:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(image_path)
-                image_bytes = resp.content
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            r = await client.post(url, content=image_bytes, headers=headers)
-            if r.status_code == 200:
-                return r.content
-            raise ValueError(f"SVD {r.status_code}: {r.text[:200]}")
+            abs_image_path = os.path.join(STORAGE_DIR, os.path.basename(image_path))
+
+        if not os.path.exists(abs_image_path):
+            raise ValueError(f"Image not found: {abs_image_path}")
+
+        preset_key = model_choice if model_choice in KENBURNS_PRESETS else "zoom_in"
+        return await VideoService._generate_kenburns(abs_image_path, preset_key, filename)
 
     @staticmethod
-    async def _save_video(data: bytes, filename: str) -> str:
+    def _run_ffmpeg(cmd: list[str]) -> tuple[int, str, str]:
+        """Run FFmpeg synchronously (called from thread pool)."""
+        result = subprocess.run(cmd, capture_output=True, timeout=120)
+        return result.returncode, result.stdout.decode(errors="replace"), result.stderr.decode(errors="replace")
+
+    @staticmethod
+    async def _generate_kenburns(image_path: str, preset_key: str, filename: str) -> dict:
+        preset = KENBURNS_PRESETS[preset_key]
         os.makedirs(STORAGE_DIR, exist_ok=True)
-        filepath = os.path.join(STORAGE_DIR, filename)
-        with open(filepath, "wb") as f:
-            f.write(data)
-        return filepath
+        output_path = os.path.join(STORAGE_DIR, filename)
+        img = image_path.replace("\\", "/")
+
+        cmd = [
+            "ffmpeg", "-y",
+            "-loop", "1",
+            "-i", img,
+            "-vf", preset["filter"],
+            "-t", "6",
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-an",
+            output_path,
+        ]
+
+        print(f"[VideoService] Ken Burns '{preset_key}' on {os.path.basename(image_path)}...")
+
+        loop = asyncio.get_event_loop()
+        returncode, stdout, stderr = await loop.run_in_executor(None, partial(VideoService._run_ffmpeg, cmd))
+
+        if returncode != 0:
+            err = stderr[-500:] if stderr else "Unknown FFmpeg error"
+            print(f"[VideoService] FFmpeg error: {err}")
+            raise RuntimeError(f"FFmpeg failed: {err}")
+
+        if not os.path.exists(output_path):
+            raise RuntimeError("FFmpeg produced no output file")
+
+        print(f"[VideoService] Created {filename} ({os.path.getsize(output_path)} bytes)")
+        return {
+            "success": True,
+            "model_name": f"{preset['display_name']} (Local FFmpeg)",
+            "file_path": output_path,
+            "url": f"/static/outputs/{filename}",
+        }

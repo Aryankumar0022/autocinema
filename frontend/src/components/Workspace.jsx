@@ -82,11 +82,10 @@ export default function Workspace({ projectId, onBack }) {
             )}
           </div>
         )}
-        {currentStep === 1 && <SegmentViewer />}
-        {currentStep === 2 && <ImagePicker />}
-        {currentStep === 3 && <VideoGenerator />}
-        {currentStep === 4 && <AudioPanel />}
-        {currentStep === 5 && (
+        {currentStep === 1 && <ImagePicker />}
+        {currentStep === 2 && <VideoGenerator />}
+        {currentStep === 3 && <AudioPanel />}
+        {currentStep === 4 && (
           <div className="glass-card animate-fade-in-up" style={{ padding: 48, textAlign: 'center' }}>
             <div style={{ fontSize: 64, marginBottom: 20 }}>🎬</div>
             <h2 style={{ fontSize: 28, fontWeight: 800, marginBottom: 12 }}>
@@ -95,11 +94,37 @@ export default function Workspace({ projectId, onBack }) {
             <p style={{ color: 'var(--text-secondary)', fontSize: 15, marginBottom: 32, maxWidth: 480, margin: '0 auto 32px' }}>
               Your 1080×1920 vertical video is ready for Instagram Reels and TikTok.
             </p>
+            {/* Video Preview */}
+            <div style={{ marginBottom: 24, display: 'flex', justifyContent: 'center' }}>
+              <video
+                controls
+                style={{ maxWidth: 300, borderRadius: 12, border: '1px solid var(--border-subtle)' }}
+                src={`/static/outputs/proj_${currentProject.id}_final.mp4`}
+              />
+            </div>
             <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
-              <a href={`/static/outputs/proj_${currentProject.id}_final.mp4`} download
-                className="btn-primary" style={{ textDecoration: 'none' }}>
+              <button
+                className="btn-primary"
+                onClick={async () => {
+                  try {
+                    const res = await fetch(`/static/outputs/proj_${currentProject.id}_final.mp4`);
+                    if (!res.ok) throw new Error('File not found');
+                    const blob = await res.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `proj_${currentProject.id}_final.mp4`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                  } catch (e) {
+                    alert('Download failed: ' + e.message);
+                  }
+                }}
+              >
                 ⬇️ Download MP4
-              </a>
+              </button>
               <button className="btn-secondary" onClick={onBack}>
                 ← Back to Dashboard
               </button>

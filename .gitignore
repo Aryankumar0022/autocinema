@@ -1,4 +1,51 @@
+# ============================================================
+# AutoCinema Root .gitignore
+# ============================================================
+
+# ── Environment & Secrets ────────────────────────────────────
 .env
+.env.local
+.env.*.local
+*.env
+
+# ── Python ───────────────────────────────────────────────────
 venv/
+.venv/
 __pycache__/
-node_modules/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ── Storage & Generated Assets ───────────────────────────────
+storage/outputs/
+storage/autocinema.db
+storage/autocinema.db-wal
+storage/autocinema.db-shm
+backend/storage/outputs/
+backend/storage/autocinema.db
+backend/storage/autocinema.db-wal
+backend/storage/autocinema.db-shm
+
+# ── Node / Frontend ─────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# ── IDE & OS ─────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Misc ─────────────────────────────────────────────────────
+*.log
+output.txt
+list_models.py

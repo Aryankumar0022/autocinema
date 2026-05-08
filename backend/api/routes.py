@@ -37,7 +37,8 @@ class SelectImageReq(BaseModel):
     asset_id: str
 
 class GenerateVideoReq(BaseModel):
-    model_choice: str = "hunyuan"  # "hunyuan" or "svd"
+    model_config = {"protected_namespaces": ()}
+    model_choice: str = "zoom_in"  # Ken Burns: "zoom_in", "zoom_out", "pan_left", "pan_up" | Cloud: "seedance", "wan-fast"
 
 class GenerateAudioReq(BaseModel):
     voice_name: str = "female_warm"
@@ -123,6 +124,11 @@ async def api_generate_images(project_id: str, seg_index: int):
 
     try:
         result = await ImageService.generate_random_pair(prompt, project_id, seg_index)
+
+        # Check if any image generation failed
+        failed_models = [info["model_name"] for info in result.values() if not info.get("success")]
+        if failed_models:
+            raise HTTPException(500, f"Image generation failed for: {', '.join(failed_models)}. Please retry.")
 
         # Save assets to database
         for option_key, info in result.items():
@@ -214,6 +220,8 @@ async def api_generate_video(project_id: str, seg_index: int, req: GenerateVideo
 
         return result
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(500, f"Video generation failed: {str(e)}")
 
 
@@ -234,11 +242,19 @@ async def api_generate_audio(project_id: str, req: GenerateAudioReq):
     if not full_narration:
         raise HTTPException(400, "No narration text available")
 
-    # Run voiceover and music generation in parallel
-    voice_task = AudioService.generate_voiceover(full_narration, req.voice_name, project_id)
-    music_task = AudioService.generate_music(req.music_prompt, project_id)
+    # Run voiceover and music generation — catch crashes gracefully
+    try:
+        voice_result = await AudioService.generate_voiceover(full_narration, req.voice_name, project_id)
+    except Exception as e:
+        print(f"[Audio] Voiceover failed: {e}")
+        raise HTTPException(500, f"Voiceover generation failed: {str(e)}")
 
-    voice_result, music_result = await asyncio.gather(voice_task, music_task)
+    # Music is optional — don't crash if it fails
+    try:
+        music_result = await AudioService.generate_music(req.music_prompt, project_id)
+    except Exception as e:
+        print(f"[Audio] Music failed (non-fatal): {e}")
+        music_result = {"success": False, "error": str(e)}
 
     await update_project(project_id, status="audio_ready")
 
@@ -288,7 +304,7 @@ async def api_render_final(project_id: str):
         raise HTTPException(400, "No video clips available. Generate videos first.")
 
     voiceover_path = os.path.join(storage, f"proj_{project_id}_voiceover.mp3")
-    music_path = os.path.join(storage, f"proj_{project_id}_music.wav")
+    music_path = os.path.join(storage, f"proj_{project_id}_music.mp3")
 
     if not os.path.exists(voiceover_path):
         raise HTTPException(400, "Voiceover not found. Generate audio first.")
@@ -306,10 +322,10 @@ async def api_render_final(project_id: str):
 
     if result["success"]:
         await update_project(project_id, status="complete")
+        return result
     else:
         await update_project(project_id, status="render_failed")
-
-    return result
+        raise HTTPException(500, f"Render failed: {result.get('error', 'Unknown error')}")
 
 
 # ── Utility Endpoints ─────────────────────────────────────────

@@ -1,16 +1,15 @@
 """
 AutoCinema Audio Service
-Cloud voiceover (Edge TTS) and background music (MusicGen via HF).
+Cloud voiceover (Edge TTS) and background music (FFmpeg local).
 """
 
 import os
+import asyncio
 import edge_tts
-import httpx
 from dotenv import load_dotenv
 
 load_dotenv()
 
-HF_API_KEY = os.getenv("HF_API_KEY")
 STORAGE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "storage", "outputs")
 
 VOICE_MAP = {
@@ -44,35 +43,47 @@ class AudioService:
 
     @staticmethod
     async def generate_music(mood_prompt: str, project_id: str, duration_seconds: float = 30.0) -> dict:
-        """Generate background music using MusicGen-Melody via HF Inference API."""
-        if not HF_API_KEY:
-            return {"success": False, "error": "HF_API_KEY not set"}
-
-        filename = f"proj_{project_id}_music.wav"
+        """Generate background music using FFmpeg ambient drone pad (instant, no network)."""
+        filename = f"proj_{project_id}_music.mp3"
         output_path = os.path.join(STORAGE_DIR, filename)
         os.makedirs(STORAGE_DIR, exist_ok=True)
+        dur = max(int(min(duration_seconds, 120)), 5)  # At least 5 seconds
 
-        url = "https://api-inference.huggingface.co/models/facebook/musicgen-small"
-        headers = {"Authorization": f"Bearer {HF_API_KEY}"}
-        payload = {
-            "inputs": mood_prompt,
-            "parameters": {"max_new_tokens": int(duration_seconds * 50)},
-        }
-
+        print(f"[Audio] Generating {dur}s ambient music via FFmpeg...")
         try:
-            async with httpx.AsyncClient(timeout=180.0) as client:
-                response = await client.post(url, json=payload, headers=headers)
-                if response.status_code == 200:
-                    with open(output_path, "wb") as f:
-                        f.write(response.content)
-                    return {
-                        "success": True,
-                        "file_path": output_path,
-                        "url": f"/static/outputs/{filename}",
-                    }
-                else:
-                    return {"success": False, "error": f"HF returned {response.status_code}"}
+            fade_out_start = max(dur - 3, 1)
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "lavfi", "-i", f"sine=frequency=220:duration={dur}",
+                "-f", "lavfi", "-i", f"sine=frequency=330:duration={dur}",
+                "-f", "lavfi", "-i", f"sine=frequency=440:duration={dur}",
+                "-f", "lavfi", "-i", f"anoisesrc=d={dur}:c=pink:r=44100:a=0.008",
+                "-filter_complex",
+                f"[0][1][2][3]amix=inputs=4:duration=longest,volume=0.15,afade=t=in:st=0:d=3,afade=t=out:st={fade_out_start}:d=3",
+                "-c:a", "libmp3lame", "-b:a", "128k",
+                output_path,
+            ]
+            print(f"[Audio] CMD: {' '.join(cmd)}")
+            process = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+
+            if process.returncode == 0 and os.path.exists(output_path):
+                size = os.path.getsize(output_path)
+                print(f"[Audio] ✓ Music created: {size} bytes")
+                return {
+                    "success": True,
+                    "file_path": output_path,
+                    "url": f"/static/outputs/{filename}",
+                    "source": "Ambient Pad",
+                }
+            else:
+                err_msg = stderr.decode(errors='replace')[-500:] if stderr else 'Unknown'
+                print(f"[Audio] ✗ FFmpeg failed (rc={process.returncode}): {err_msg}")
+                return {"success": False, "error": f"FFmpeg failed: {err_msg}"}
         except Exception as e:
+            print(f"[Audio] ✗ Exception: {e}")
             return {"success": False, "error": str(e)}
 
     @staticmethod
